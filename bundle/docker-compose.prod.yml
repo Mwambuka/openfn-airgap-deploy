@@ -1,0 +1,105 @@
+# OpenFn Lightning — Production Compose File
+# ─────────────────────────────────────────────────────────────────────────────
+# Derived from the upstream docker-compose.yml for air-gapped production use.
+# All images are loaded from local .tar.gz archives; no registry access occurs.
+#
+# Requires a .env file in the same directory (created by setup-env.sh).
+#
+# Resource limits are sized for: 8 GB RAM / 4 vCPU / single-server deployment.
+# Adjust limits to match your hardware if different.
+
+services:
+  postgres:
+    image: 'postgres:15.12-alpine'
+    restart: unless-stopped
+    stop_grace_period: '10s'
+    environment:
+      POSTGRES_USER: lightning
+      POSTGRES_PASSWORD: '${POSTGRES_PASSWORD}'
+      POSTGRES_DB: lightning_prod
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U lightning -d lightning_prod']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    logging:
+      driver: json-file
+      options:
+        max-size: '10m'
+        max-file: '3'
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: '1536M'
+
+  web:
+    image: 'ghcr.io/openfn/lightning:v2.16.7'
+    restart: unless-stopped
+    stop_grace_period: '15s'
+    depends_on:
+      postgres:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      # Override / computed from .env variables
+      DATABASE_URL: 'postgresql://lightning:${POSTGRES_PASSWORD}@postgres:5432/lightning_prod'
+      DISABLE_DB_SSL: 'true'
+      MIX_ENV: 'prod'
+      PORT: '4000'
+      # 0.0.0.0 is required so Docker's port-publishing can reach Phoenix
+      LISTEN_ADDRESS: '0.0.0.0'
+      # Disable phoning home — this server has no outbound internet
+      USAGE_TRACKING_ENABLED: 'false'
+    ports:
+      - '${LIGHTNING_PORT:-4000}:4000'
+    healthcheck:
+      test: ['CMD-SHELL', 'curl -sf http://localhost:4000/health_check || exit 1']
+      interval: 30s
+      timeout: 10s
+      start_period: 120s
+      retries: 5
+    logging:
+      driver: json-file
+      options:
+        max-size: '50m'
+        max-file: '5'
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: '4096M'
+
+  worker:
+    image: 'openfn/ws-worker:latest'
+    restart: unless-stopped
+    stop_grace_period: '30s'
+    depends_on:
+      web:
+        condition: service_healthy
+        restart: true
+    # Hardcode internal port — worker always connects to web:4000 inside Docker network
+    command: ['pnpm', 'start:prod', '-l', 'ws://web:4000/worker']
+    env_file:
+      - .env
+    environment:
+      # Force Node.js to prefer IPv4 — avoids DNS issues on some Linux kernels
+      NODE_OPTIONS: '--dns-result-order=ipv4first'
+    logging:
+      driver: json-file
+      options:
+        max-size: '20m'
+        max-file: '3'
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: '1536M'
+
+volumes:
+  postgres_data:
+    driver: local

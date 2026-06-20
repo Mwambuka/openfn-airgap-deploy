@@ -1,0 +1,14 @@
+# Never commit secrets
+.env
+*.env.bak
+
+# Never commit the generated bundle (it's ~3-5 GB of Docker images)
+openfn-lightning-bundle-*.tar.gz
+openfn-lightning-bundle-*.tar.gz.sha256
+
+# Never commit extracted bundle directories
+openfn-lightning-bundle-*/
+
+# OS noise
+.DS_Store
+Thumbs.db
